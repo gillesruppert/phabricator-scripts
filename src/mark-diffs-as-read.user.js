@@ -90,16 +90,93 @@ injectStyles(
 );
 
 injectJS(function(global) {
+  var uniqueIDCounter = 0;
 
   /* UTILITIES */
-
   function $(selector, start) {
     return (start || document).querySelector(selector);
   }
 
   function $$(selector, start) {
-    return JX.$A((start || document).querySelectorAll(selector));
+    return toArray((start || document).querySelectorAll(selector));
   }
+
+  function findNodes(parent, tag, sigil) {
+    var nodes = toArray(parent.getElementsByTagName(tag));
+    if (sigil) {
+      nodes = nodes.filter(node => hasSigil(node, sigil));
+    }
+    return nodes;
+  }
+
+  /* JX replacement helpers */
+  // JX.$A replacement
+  function toArray(arrayLike, index) {
+    index = index || 0;
+    return Array.prototype.slice(arrayLike, index);
+  }
+
+  function addSigil(node, sigil) {
+    node.dataset[sigil] = true;
+  }
+
+  function hasSigil(node, sigil) {
+    return !!node.dataset[sigil];
+  }
+
+  function removeSigil(node, sigil) {
+    delete node.dataset[sigil];
+  }
+
+  function addMeta(node, meta, value) {
+    node.dataset['meta_' + meta] = value;
+  }
+
+  function getMeta(node, meta) {
+    return node.dataset['meta_' + meta];
+  }
+
+  function removeMeta(node, meta) {
+    delete node.dataset['meta_' + meta];
+  }
+
+  function toggleClass(node, className, addRemove) {
+    var classList = node.classList;
+    classList.toggle(className, addRemove);
+  }
+
+  // JX.$N replacement
+  function createNode(tag, attributes, content) {
+    var node = document.createElement(tag);
+    Object.keys(attributes || {}).forEach(attr => {
+      node.setAttribute(attr, attributes[attr]);
+    });
+
+    if (typeof content === 'string') {
+      node.textContent = content;
+    } else if (content) {
+      node.innerHTML = content;
+    }
+
+    return node;
+  }
+
+  function prependContent(node, content) {
+    var firstChild = node.firstChild;
+    node.insertBefore(content, firstChild);
+  }
+
+  function appendContent(node, content) {
+    node.appendChild(content);
+  }
+
+  function uniqueID(node) {
+    if (!node.id) {
+      node.id = 'uniqueID_' + ++uniqueIDCounter;
+    }
+    return node.id;
+  }
+
 
   var ScriptStorage = global.ScriptStorage = {
     subscribe: function(key, callback) {
@@ -137,18 +214,13 @@ injectJS(function(global) {
       '.aphront-list-filter-view .aphront-list-filter-reveal'
     );
     if (submitControls) {
-      var checkbox = JX.$N('input', {type: 'checkbox', sigil: 'toggle-hide'});
-      JX.DOM.prependContent(
-        submitControls,
-        JX.$N('div', {className: 'hide-control'}, [
-          JX.$N(
-            'label',
-            {htmlFor: JX.DOM.uniqID(checkbox)},
-            'Show Read Diffs '
-          ),
-          checkbox
-        ])
-      );
+      var checkbox = createNode('input', {type: 'checkbox', sigil: 'toggle-hide'});
+      addSigil(checkbox, 'toggle-hide');
+      var label = createNode('label', {htmlFor: uniqueID(checkbox)}, 'Show Read Diffs ')
+      var div = createNode('div', {className: 'hide-control'});
+      appenContent(div, label);
+      appendContent(div, checkbox);
+      prependContent(submitControls, div);
     }
   })();
 
@@ -159,7 +231,8 @@ injectJS(function(global) {
      * List View
      */
     $$('.phui-object-item-list-view').forEach(function(listView) {
-      var rows = JX.DOM.scry(listView, 'li');
+      var rows = listView.getElementsByTagName('li');
+      rows = toArray(rows);
 
       var hasRows = false;
       var isEmpty = true;
@@ -168,13 +241,14 @@ injectJS(function(global) {
         return row.parentNode === listView;
       }).forEach(function(row, index) {
         var diffIDNode = $$('.phui-object-item-objname', row)[0];
-        var timeNode = JX.DOM.scry(row, 'span', 'time-label')[0];
+        //var timeNode = JX.DOM.scry(row, 'span', 'time-label')[0];
+        var timeNode = findNodes(row, 'span', 'time-label')[0];
 
         if (!timeNode) {
           var labelNodes = $$('.phui-object-item-icon-label', row);
           if (labelNodes.length) {
-            timeNode = labelNodes[labelNodes.length - 1];
-            JX.Stratcom.addSigil(timeNode, 'time-label');
+            timeNode = labelNodes[labelNodes.length - 2];
+            addSigil(timeNode, 'time-label');
           }
         }
 
@@ -192,38 +266,36 @@ injectJS(function(global) {
         }
         hasRows = true;
 
-        var hideLinkNode =
-          JX.$N('i', {
-            className:
-              'hide-icon glyph glyph-gray ' + (
-                isHidden ? 'glyph-eye-close' : 'glyph-eye-open'
-              ),
-            sigil: 'hide-link',
-            meta: {
-              isHidden: isHidden,
-              cellID: cellID,
-              time: timeString
-            }
-          });
+        var hideLinkNode = createNode('i', {
+          className: 'hide-icon glyph glyph-gray ' + (
+            isHidden ? 'glyph-eye-close' : 'glyph-eye-open'
+          )
+        });
+        addSigil(hideLinkNode, 'hide-link');
+        addMeta(hideLinkNode, 'isHidden', isHidden);
+        addMeta(hideLinkNode, 'cellID', cellID);
+        addMeta(hideLinkNode, 'time', timeString);
 
         var labelContainerNode = timeNode.parentNode;
-        var prevLink = JX.DOM.scry(labelContainerNode, 'i', 'hide-link')[0];
+        var prevLink = findNodes(labelContainerNode, 'i', 'hide-link')[0];
         if (prevLink) {
+          // TODO: gillesruppert figure out how to implement replace
           JX.DOM.replace(prevLink, hideLinkNode);
         } else {
-          var hideLabelNode = JX.$N(
+          var hideLabelNode = createNode(
             'span',
             {className: 'phui-object-item-icon-label'},
             hideLinkNode
           );
-          JX.DOM.appendContent(labelContainerNode, hideLabelNode);
+          appendContent(labelContainerNode, hideLabelNode);
         }
-        JX.DOM.alterClass(row, 'hidden-row', isHidden);
+        toggleClass(row, 'hidden-row', isHidden);
       });
 
       var emptyNode = $$('.all-hidden', listView)[0];
       if (isEmpty && hasRows) {
         if (!emptyNode) {
+          // TODO: gillesruppert continue
           emptyNode = JX.$N('li', {
             className: 'all-hidden phabricatordefault-li'
           }, [
