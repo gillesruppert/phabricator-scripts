@@ -101,14 +101,6 @@ injectJS(function(global) {
     return toArray((start || document).querySelectorAll(selector));
   }
 
-  function findNodes(parent, tag, sigil) {
-    var nodes = toArray(parent.getElementsByTagName(tag));
-    if (sigil) {
-      nodes = nodes.filter(node => hasSigil(node, sigil));
-    }
-    return nodes;
-  }
-
   /* JX replacement helpers */
   // JX.$A replacement
   function toArray(arrayLike, index) {
@@ -116,6 +108,11 @@ injectJS(function(global) {
     return Array.prototype.slice(arrayLike, index);
   }
 
+  function isObject(item) {
+    return Object.prototype.toString.call(item) === '[object Object]';
+  }
+
+  // very basic sigil-like support
   function addSigil(node, sigil) {
     node.dataset[sigil] = true;
   }
@@ -128,6 +125,7 @@ injectJS(function(global) {
     delete node.dataset[sigil];
   }
 
+  // very basic meta data support
   function addMeta(node, meta, value) {
     node.dataset['meta_' + meta] = value;
   }
@@ -145,30 +143,64 @@ injectJS(function(global) {
     classList.toggle(className, addRemove);
   }
 
-  // JX.$N replacement
+  // JX.$N replacement (approximation)
   function createNode(tag, attributes, content) {
+    if (!content && !isObject(attributes)) {
+      content = attributes;
+      attributes = null;
+    }
+
     var node = document.createElement(tag);
     Object.keys(attributes || {}).forEach(attr => {
-      node.setAttribute(attr, attributes[attr]);
+      if (attr === 'sigil') {
+        addSigil(node, attributes.sigil);
+      } else if (attr === 'meta') {
+        Object.key(attributes.meta).forEach(key => addMeta(node, key, attributes.meta[key]));
+      } else {
+        node.setAttribute(attr, attributes[attr]);
+      }
     });
 
-    if (typeof content === 'string') {
-      node.textContent = content;
-    } else if (content) {
-      node.innerHTML = content;
+    if (!Array.isArray(content)) {
+      content = [content];
     }
+
+    content.forEach(el => {
+      // if it is an HTML string, i.e. '<p>test</p>'
+      if (
+        typeof el === 'string' &&
+        el.trim().startsWith('<') &&
+        el.trim().endsWith('>')
+      ) {
+        node.insertAdjacentHTML('beforeend', el);
+      }
+      else if (typeof el === 'string') {
+        node.insertAdjacentText('beforeend', el);
+      }
+      else if (el instanceof HTMLElement) {
+        node.insertAdjacentElement('beforeend', el);
+      }
+    });
 
     return node;
   }
 
-  function prependContent(node, content) {
-    var firstChild = node.firstChild;
+  function prependContent(node, content, reference) {
+    reference = reference || node.firstChild;
     node.insertBefore(content, firstChild);
   }
 
-  function appendContent(node, content) {
-    node.appendChild(content);
+  function replaceContent(node, replacement) {
+    var parent = node.parentNode;
+    var ref = node.nextSibling;
+    parent.removeChild(node);
+    if (ref) {
+      prependContent(parent, replacement, ref);
+    } else {
+      parent.appendChild(replacement);
+    }
   }
+
 
   function uniqueID(node) {
     if (!node.id) {
@@ -214,12 +246,10 @@ injectJS(function(global) {
       '.aphront-list-filter-view .aphront-list-filter-reveal'
     );
     if (submitControls) {
-      var checkbox = createNode('input', {type: 'checkbox', sigil: 'toggle-hide'});
-      addSigil(checkbox, 'toggle-hide');
-      var label = createNode('label', {htmlFor: uniqueID(checkbox)}, 'Show Read Diffs ')
-      var div = createNode('div', {className: 'hide-control'});
-      appenContent(div, label);
-      appendContent(div, checkbox);
+      var div = createNode('div', {className: 'hide-control'}, [
+        createNode('label', {htmlFor: uniqueID(checkbox)}, 'Show Read Diffs '),
+        createNode('input', {type: 'checkbox', sigil: 'toggle-hide'})
+      ]);
       prependContent(submitControls, div);
     }
   })();
@@ -279,15 +309,14 @@ injectJS(function(global) {
         var labelContainerNode = timeNode.parentNode;
         var prevLink = findNodes(labelContainerNode, 'i', 'hide-link')[0];
         if (prevLink) {
-          // TODO: gillesruppert figure out how to implement replace
-          JX.DOM.replace(prevLink, hideLinkNode);
+          replace(prevLink, hideLinkNode);
         } else {
           var hideLabelNode = createNode(
             'span',
             {className: 'phui-object-item-icon-label'},
             hideLinkNode
           );
-          appendContent(labelContainerNode, hideLabelNode);
+          labelContainerNode.appendChild(hideLabelNode);
         }
         toggleClass(row, 'hidden-row', isHidden);
       });
@@ -296,17 +325,17 @@ injectJS(function(global) {
       if (isEmpty && hasRows) {
         if (!emptyNode) {
           // TODO: gillesruppert continue
-          emptyNode = JX.$N('li', {
+          emptyNode = createNode('li', {
             className: 'all-hidden phabricatordefault-li'
           }, [
-            JX.$N('div', {
-              className: 'all-hidden-view phabricatordefault-div'
-            },
-              JX.$N('div', {
+            createNode('div', {
+                className: 'all-hidden-view phabricatordefault-div'
+              },
+              createNode('div', {
                 className: 'all-hidden-view-body phabricatordefault-div'
               }, [
                 'All revisions are marked as ',
-                JX.$N('i', {
+                createNode('i', {
                   className: 'hide-icon glyph glyph-gray glyph-eye-close'
                 }),
                 ' read.'
@@ -314,10 +343,10 @@ injectJS(function(global) {
             )
           ]);
         }
-        JX.DOM.appendContent(listView, emptyNode);
+        listView.appendChild(emptyNode);
       } else {
         if (emptyNode) {
-          JX.DOM.remove(emptyNode);
+          emptyNode.remove();
         }
       }
     });
@@ -341,7 +370,7 @@ injectJS(function(global) {
         hiddenDiffs[cellID] && hiddenDiffs[cellID] === timeString;
 
       var hideLinkNode =
-        JX.$N('a', {
+        createNode('a', {
           className: 'mll policy-link phabricatordefault-a',
           sigil: 'hide-link',
           meta: {
@@ -350,7 +379,7 @@ injectJS(function(global) {
             time: timeString
           }
         }, [
-          JX.$N('i', {
+          createNode('i', {
             className:
               'msr hide-icon glyph glyph-gray ' + (
                 isHidden ? 'glyph-eye-close' : 'glyph-eye-open'
@@ -359,15 +388,16 @@ injectJS(function(global) {
           isHidden ? 'Read' : 'Unread'
         ]);
 
-      var prevLink = JX.DOM.scry(headerNode, 'a', 'hide-link')[0];
+      var prevLink = findNodes(headerNode, 'a', 'hide-link')[0];
       if (prevLink) {
-        JX.DOM.replace(prevLink, hideLinkNode);
+        replace(prevLink, hideLinkNode);
       } else {
-        JX.DOM.appendContent(headerNode, hideLinkNode);
+        headerNode.appendChild(hideLinkNode);
       }
     });
   }
 
+  // TODO: gillesruppert implement this logic with DOM methods
   JX.Stratcom.listen('mousedown', 'hide-link', function(event) {
     var hideLink = event.getNodeData('hide-link');
     var cellID = hideLink.cellID;
@@ -392,7 +422,7 @@ injectJS(function(global) {
     JX.DOM.alterClass(document.body, 'show-hidden-rows', checkbox.checked);
   });
 
-  if (JX.Tooltip) {
+  if (window.JX && JX.Tooltip) {
     JX.Stratcom.listen(
       ['mouseover', 'mouseout', 'mousedown'],
       'hide-link',
