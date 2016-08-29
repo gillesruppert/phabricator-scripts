@@ -1,9 +1,11 @@
 // ==UserScript==
 // @name           Phabricator: Mark Diffs as Read
-// @version        0.4.2
+// @version        0.4.3
 // @description    Adds a "Mark as Read" toggle to diffs in Phabricator
 // @match          https://secure.phabricator.com/*
 // @match          https://phabricator.fb.com/*
+// @match          https://phabricator.intern.facebook.com/*
+// @grant          none
 // ==/UserScript==
 
 function injectJS(callback) {
@@ -94,18 +96,18 @@ injectJS(function(global) {
 
   /* UTILITIES */
   function $(selector, start) {
-    return (start || document).querySelector(selector);
+    return (start || document.body).querySelector(selector);
   }
 
   function $$(selector, start) {
-    return toArray((start || document).querySelectorAll(selector));
+    return toArray((start || document.body).querySelectorAll(selector));
   }
 
   /* JX replacement helpers */
   // JX.$A replacement
   function toArray(arrayLike, index) {
     index = index || 0;
-    return Array.prototype.slice(arrayLike, index);
+    return Array.prototype.slice.call(arrayLike, index);
   }
 
   function isObject(item) {
@@ -114,7 +116,7 @@ injectJS(function(global) {
 
   // very basic sigil-like support
   function addSigil(node, sigil) {
-    node.dataset[sigil] = true;
+    node.dataset[sigil] = 'true';
   }
 
   function hasSigil(node, sigil) {
@@ -136,6 +138,14 @@ injectJS(function(global) {
 
   function removeMeta(node, meta) {
     delete node.dataset['meta_' + meta];
+  }
+
+  function getAllMeta(node) {
+    var metaData = {};
+    var keys = Object.keys(node.dataset);
+    keys = keys.filter(key => key.startWith('meta_'));
+    keys.forEach(key => metaData[key] = node.dataset[key]);
+    return metaData;
   }
 
   function toggleClass(node, className, addRemove) {
@@ -185,9 +195,17 @@ injectJS(function(global) {
     return node;
   }
 
+  function findNodes(parent, tag, sigil) {
+    var nodes = toArray(parent.getElementsByTagName(tag));
+    if (sigil) {
+      nodes = nodes.filter(node => hasSigil(node, sigil));
+    }
+    return nodes;
+  }
+
   function prependContent(node, content, reference) {
     reference = reference || node.firstChild;
-    node.insertBefore(content, firstChild);
+    node.insertBefore(content, reference);
   }
 
   function replaceContent(node, replacement) {
@@ -200,7 +218,6 @@ injectJS(function(global) {
       parent.appendChild(replacement);
     }
   }
-
 
   function uniqueID(node) {
     if (!node.id) {
@@ -246,9 +263,12 @@ injectJS(function(global) {
       '.aphront-list-filter-view .aphront-list-filter-reveal'
     );
     if (submitControls) {
+      var checkbox = createNode('input', {type: 'checkbox', sigil: 'toggle_hide'});
+      uniqueID(checkbox);
+      var label = createNode('label', {htmlFor: uniqueID(checkbox)}, 'Show Read Diffs ');
       var div = createNode('div', {className: 'hide-control'}, [
-        createNode('label', {htmlFor: uniqueID(checkbox)}, 'Show Read Diffs '),
-        createNode('input', {type: 'checkbox', sigil: 'toggle-hide'})
+        label,
+        checkbox
       ]);
       prependContent(submitControls, div);
     }
@@ -271,14 +291,13 @@ injectJS(function(global) {
         return row.parentNode === listView;
       }).forEach(function(row, index) {
         var diffIDNode = $$('.phui-object-item-objname', row)[0];
-        //var timeNode = JX.DOM.scry(row, 'span', 'time-label')[0];
-        var timeNode = findNodes(row, 'span', 'time-label')[0];
+        var timeNode = $$('.phui-object-item-icon-label', row)[0];
 
         if (!timeNode) {
           var labelNodes = $$('.phui-object-item-icon-label', row);
           if (labelNodes.length) {
             timeNode = labelNodes[labelNodes.length - 2];
-            addSigil(timeNode, 'time-label');
+            addSigil(timeNode, 'time_label');
           }
         }
 
@@ -289,7 +308,7 @@ injectJS(function(global) {
         var cellID = diffIDNode.textContent;
         var timeString = timeNode.textContent;
         var isHidden =
-          hiddenDiffs[cellID] && hiddenDiffs[cellID] === timeString;
+          !!(hiddenDiffs[cellID] && hiddenDiffs[cellID] === timeString);
 
         if (!isHidden) {
           isEmpty = false;
@@ -301,13 +320,13 @@ injectJS(function(global) {
             isHidden ? 'glyph-eye-close' : 'glyph-eye-open'
           )
         });
-        addSigil(hideLinkNode, 'hide-link');
+        addSigil(hideLinkNode, 'hide_link');
         addMeta(hideLinkNode, 'isHidden', isHidden);
         addMeta(hideLinkNode, 'cellID', cellID);
         addMeta(hideLinkNode, 'time', timeString);
 
         var labelContainerNode = timeNode.parentNode;
-        var prevLink = findNodes(labelContainerNode, 'i', 'hide-link')[0];
+        var prevLink = findNodes(labelContainerNode, 'i', 'hide_link')[0];
         if (prevLink) {
           replace(prevLink, hideLinkNode);
         } else {
@@ -324,7 +343,6 @@ injectJS(function(global) {
       var emptyNode = $$('.all-hidden', listView)[0];
       if (isEmpty && hasRows) {
         if (!emptyNode) {
-          // TODO: gillesruppert continue
           emptyNode = createNode('li', {
             className: 'all-hidden phabricatordefault-li'
           }, [
@@ -372,7 +390,7 @@ injectJS(function(global) {
       var hideLinkNode =
         createNode('a', {
           className: 'mll policy-link phabricatordefault-a',
-          sigil: 'hide-link',
+          sigil: 'hide_link',
           meta: {
             isHidden: isHidden,
             cellID: cellID,
@@ -388,7 +406,7 @@ injectJS(function(global) {
           isHidden ? 'Read' : 'Unread'
         ]);
 
-      var prevLink = findNodes(headerNode, 'a', 'hide-link')[0];
+      var prevLink = findNodes(headerNode, 'a', 'hide_link')[0];
       if (prevLink) {
         replace(prevLink, hideLinkNode);
       } else {
@@ -397,11 +415,16 @@ injectJS(function(global) {
     });
   }
 
-  // TODO: gillesruppert implement this logic with DOM methods
-  JX.Stratcom.listen('mousedown', 'hide-link', function(event) {
-    var hideLink = event.getNodeData('hide-link');
-    var cellID = hideLink.cellID;
-    var updatedTime = hideLink.time;
+  document.body.addEventListener('mousedown', e => {
+    if (!hasSigil(e.target, 'hide_link')) {
+      return;
+    }
+    e.stopPropagation();
+    e.preventDefault();
+    var hideLink = e.target;
+    var metaData = getAllMeta(hideLink);
+    var cellID = metaData.cellID;
+    var updatedTime = metaData.time;
 
     var hiddenDiffs = ScriptStorage.get('hiddendiffs');
 
@@ -413,34 +436,15 @@ injectJS(function(global) {
 
     ScriptStorage.set('hiddendiffs', hiddenDiffs);
     flushStorageToView();
-
-    event.prevent();
   });
 
-  JX.Stratcom.listen('change', 'toggle-hide', function(event) {
-    var checkbox = event.getNode('toggle-hide');
-    JX.DOM.alterClass(document.body, 'show-hidden-rows', checkbox.checked);
+  document.body.addEventListener('change', e => {
+    if (!hasSigil(e.target, 'toggle_hide')) {
+      return;
+    }
+    var checkbox = e.target;
+    toggleClass(document.body, 'show-hidden-rows', checkbox.checked);
   });
-
-  if (window.JX && JX.Tooltip) {
-    JX.Stratcom.listen(
-      ['mouseover', 'mouseout', 'mousedown'],
-      'hide-link',
-      function(event) {
-        if (event.getType() === 'mouseover') {
-          var isHidden = event.getNodeData('hide-link').isHidden;
-          JX.Tooltip.show(
-            event.getNode('hide-link'),
-            1000,
-            'W',
-             isHidden ? 'Mark as Unread' : 'Mark as Read'
-          );
-        } else {
-          JX.Tooltip.hide();
-        }
-      }
-    );
-  }
 
   flushStorageToView();
 
